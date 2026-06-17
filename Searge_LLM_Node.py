@@ -78,9 +78,12 @@ class Searge_LLM_Node:
                 if "n_ctx" in adv_options_config:
                     n_ctx = adv_options_config["n_ctx"]
 
+            # n_gpu_layers=0: force CPU to avoid VRAM conflict when NVFP4 diffusion
+            # models are loaded alongside llama-cpp. llama-cpp and PyTorch compete
+            # for VRAM and the resulting cast triggers a segfault on sm_120.
             model_to_use = Llama(
                 model_path=model_path,
-                n_gpu_layers=-1,
+                n_gpu_layers=0,
                 seed=random_seed,
                 verbose=False,
                 n_ctx=n_ctx,
@@ -203,8 +206,18 @@ class Searge_LLM_Node:
                 ]
 
             llm_result = model_to_use.create_chat_completion(messages, **generate_kwargs)
+            result_text = llm_result["choices"][0]["message"]["content"].strip()
 
-            return (llm_result["choices"][0]["message"]["content"].strip(), text)
+            # Free GPU memory before returning so PyTorch models can load cleanly.
+            del model_to_use
+            try:
+                import gc, torch
+                gc.collect()
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+            return (result_text, text)
         else:
             return ("NOT A GGUF MODEL", text)
 
